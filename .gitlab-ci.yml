@@ -1,0 +1,65 @@
+# Install PostgreSQL service on the container
+services:
+  # Postgres image from docker hub  
+  - postgres:14.5
+
+variables:
+  POSTGRES_DB: pg_db
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: IntegrationTests123!
+  POSTGRES_HOST_AUTH_METHOD: trust
+
+stages:
+  - integraiontests
+  - buidship
+
+# Run integration tests that involve app services,                             .
+# AWS Secret Manager secrets, and database
+integraiontests:
+  stage: integraiontests
+  # to install .NET6 SDK
+  image: mcr.microsoft.com/dotnet/sdk:6.0
+  variables:
+    # test project's path from your GitLab-ci root folder
+    project_path: "myapp.integrationtests"
+  before_script:
+    - apt-get update
+    - apt-get install zip unzip
+    - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+      -o "awscliv2.zip"
+    - unzip -q awscliv2.zip
+    - ./aws/install
+    # - apt-get install awscli # another way to install aws cli
+    - aws --version
+    - dotnet --version
+  script:
+    # get aws secrets
+    - secret_value="$(aws secretsmanager get-secret-value
+      --secret-id aws_secret_name --output json --query SecretString)"   
+    - echo $secret_value #debugging purpose
+    # this will run your test project by running its .csproj file
+    - Config=$secret_value
+      dotnet test "myapp.integrationtests/myapp.integrationtests.csproj"
+  retry: 1
+  only:
+    - main #branch on which it will run                                        .
+
+#build and push docker image to AWS ECR
+buidship:
+  stage: buidship
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_REGISTRY: <account_id>.dkr.ecr.<aws_region>.amazonaws.com
+    APP_NAME: <registry_name>
+    AWS_DEFAULT_REGION: <aws_region>
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - docker --version
+  script:
+    - docker build -t $DOCKER_REGISTRY/$APP_NAME:myapp.image -f Dockerfile .
+    - docker push $DOCKER_REGISTRY/$APP_NAME:myapp.image
+  only:
+    - main #branch on which it will run
